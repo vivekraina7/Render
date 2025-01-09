@@ -1,9 +1,10 @@
 import streamlit as st
-import cv2
 import os
 import pandas as pd
 from datetime import datetime
-import time
+from PIL import Image
+import cv2
+import numpy as np
 
 # Set page configs
 st.set_page_config(
@@ -30,90 +31,226 @@ with st.sidebar:
     # Sidebar options for face detection modes
     detection_mode = st.radio(
         "Choose Face Detection Mode",
-        ('Home', 'Webcam Image Capture', 'Webcam Realtime Attendance Fill', 'Train Faces', 'Manual Attendance'),
+        ('Home', 'File Upload for Image Capture', 'Manual Attendance','Train Faces','Recognize Faces','Recognize from Camera'),
         index=0
     )
+
+# Load Haar Cascade for face detection
+detector = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
 
 # Main Page Content Based on Mode Selection
 if detection_mode == "Home":
     st.title("Home 🏡")
     st.write("Welcome to the Real-Time Face Detection App!")
 
-elif detection_mode == "Webcam Image Capture":
-    st.header("Webcam Image Capture")
-    run = st.checkbox("Run Webcam")
-    FRAME_WINDOW = st.image([])  # Placeholder for video feed
-    camera = cv2.VideoCapture(0)  # Open webcam
-
-    detector = cv2.CascadeClassifier('haarcascade_frontalface_default.xml')
+elif detection_mode == "File Upload for Image Capture":
+    st.header("File Upload for Image Capture")
     Enrollment = st.text_input("Enter Enrollment ID", value="333")
     Name = st.text_input("Enter Name", value="vivek")
-    sampleNum = 0
 
-    # Initialize DataFrame for attendance records
-    csv_file = "attendance.csv"
-    columns = ["Enrollment", "Name", "Date", "Time"]
-    if not os.path.exists(csv_file):
-        pd.DataFrame(columns=columns).to_csv(csv_file, index=False)
+    if Enrollment and Name:
+        # Create a folder for the student
+        folder_path = os.path.join("TrainingImages", f"{Name}_{Enrollment}")
+        os.makedirs(folder_path, exist_ok=True)
 
-    while run:
-        ret, img = camera.read()
-        if not ret:
-            st.error("Failed to access the webcam. Please ensure it's connected.")
-            break
+        st.write(f"Upload at least 5 images for {Name} ({Enrollment}).")
 
-        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-        faces = detector.detectMultiScale(gray, 1.3, 5)
+        # File uploader to accept multiple images
+        uploaded_files = st.file_uploader("Upload Images", type=["jpg", "jpeg", "png"], accept_multiple_files=True)
 
-        for (x, y, w, h) in faces:
-            cv2.rectangle(img, (x, y), (x + w, y + h), (0, 255, 0), 2)
+        if uploaded_files:
+            saved_files = []
 
-            # Save face images
-            sampleNum += 1
-            face_img = gray[y:y + h, x:x + w]
-            os.makedirs("TrainingImage", exist_ok=True)
-            cv2.imwrite(
-                f"TrainingImage/{Name}.{Enrollment}.{sampleNum}.jpg", face_img
-            )
-            st.text(f"Image {sampleNum} saved for Enrollment ID: {Enrollment}")
+            for i, uploaded_file in enumerate(uploaded_files):
+                if i >= 5:  # Limit to 5 images
+                    break
 
-            if sampleNum >= 20:
-                st.success("Captured 20 images successfully.")
-                run = False
+                # Open the uploaded image
+                image = Image.open(uploaded_file)
+                
+                # Ensure the image is in RGB format
+                image = image.convert("RGB")
+                image_np = np.array(image)
 
-                # Save attendance record to CSV
-                now = datetime.now()
-                date = now.strftime("%Y-%m-%d")
-                time_str = now.strftime("%H:%M:%S")
+                # Convert image to grayscale for face detection
+                gray = cv2.cvtColor(image_np, cv2.COLOR_RGB2GRAY)
 
-                # Append data to the CSV
-                df = pd.DataFrame([[Enrollment, Name, date, time_str]], columns=columns)
-                df.to_csv(csv_file, mode='a', index=False, header=False)
+                # Detect faces
+                faces = detector.detectMultiScale(gray, 1.3, 5)
 
-                # Display CSV
-                st.write("### Attendance Record")
-                st.dataframe(pd.read_csv(csv_file))
-                break
+                for (x, y, w, h) in faces:
+                    # Crop the face region
+                    face = image_np[y:y + h, x:x + w]
+                    face_image = Image.fromarray(face)
 
-            # Add delay of 1 second between captures
-            time.sleep(1)
+                    # Save the cropped face image
+                    file_path = os.path.join(folder_path, f"face_{i+1}.jpg")
+                    face_image.save(file_path)
+                    saved_files.append(file_path)
 
-        # Convert to RGB for Streamlit display
-        img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-        FRAME_WINDOW.image(img_rgb)
+            st.success(f"Successfully saved {len(saved_files)} face images in folder: {folder_path}")
 
-    # Release camera resources
-    camera.release()
-    cv2.destroyAllWindows()
+            # Save details in a CSV
+            csv_file = "attendance.csv"
+            columns = ["Enrollment", "Name", "Date", "Time"]
+            now = datetime.now()
+            date = now.strftime("%Y-%m-%d")
+            time_str = now.strftime("%H:%M:%S")
 
-elif detection_mode == "Webcam Realtime Attendance Fill":
-    st.header("Webcam Realtime Attendance Fill")
-    st.write("This feature is under development.")
+            if not os.path.exists(csv_file):
+                pd.DataFrame(columns=columns).to_csv(csv_file, index=False)
+
+            df = pd.DataFrame([[Enrollment, Name, date, time_str]], columns=columns)
+            df.to_csv(csv_file, mode='a', index=False, header=False)
+
+            st.write("### Attendance Record")
+            st.dataframe(pd.read_csv(csv_file))
+
+
 
 elif detection_mode == "Train Faces":
     st.header("Train Faces")
-    st.write("This feature is under development.")
 
+    # Path for face image database
+    path = 'TrainingImages'
+
+    recognizer = cv2.face.LBPHFaceRecognizer_create()
+    detector = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_frontalface_default.xml")
+
+    # Function to get the images and label data
+    def getImagesAndLabels(path):
+        faceSamples = []
+        ids = []
+
+        for root, _, files in os.walk(path):
+            for file in files:
+                try:
+                    imagePath = os.path.join(root, file)
+                    PIL_img = Image.open(imagePath).convert('L')  # Convert to grayscale
+                    img_numpy = np.array(PIL_img, 'uint8')
+
+                    id = int(os.path.basename(root).split("_")[-1])  # Extract ID from folder name
+                    faces = detector.detectMultiScale(img_numpy)
+
+                    for (x, y, w, h) in faces:
+                        faceSamples.append(img_numpy[y:y + h, x:x + w])
+                        ids.append(id)
+                except Exception as e:
+                    st.warning(f"Skipped file {file}: {e}")
+
+        return faceSamples, ids
+
+    st.text("\n [INFO] Training faces. It will take a few seconds. Wait ...")
+    faces, ids = getImagesAndLabels(path)
+    recognizer.train(faces, np.array(ids))
+
+    # Save the model into trainer/trainer.yml
+    os.makedirs("TrainingImageLabel", exist_ok=True)
+    recognizer.write('TrainingImageLabel/Trainer.yml')
+
+    # Print the number of faces trained and end program
+    st.text(f"\n [INFO] {len(np.unique(ids))} faces trained. Exiting Program")
+
+
+
+elif detection_mode == "Recognize Faces":
+    st.header("Recognize Faces")
+
+    # File uploader to input an image
+    uploaded_file = st.file_uploader("Upload an Image to Recognize Faces", type=["jpg", "jpeg", "png"])
+
+    if uploaded_file is not None:
+        image = Image.open(uploaded_file)
+        image_np = np.array(image)
+
+        # Convert image to grayscale for face detection
+        gray = cv2.cvtColor(image_np, cv2.COLOR_BGR2GRAY)
+
+        # Detect faces
+        faces = detector.detectMultiScale(gray, 1.3, 5)
+
+        # Load the trained recognizer model
+        recognizer = cv2.face.LBPHFaceRecognizer_create()
+        recognizer.read('TrainingImageLabel/Trainer.yml')
+
+        recognized_faces = []
+
+        for (x, y, w, h) in faces:
+            face_id, confidence = recognizer.predict(gray[y:y + h, x:x + w])
+            recognized_faces.append((face_id, confidence))
+
+            # Draw a rectangle around the face
+            cv2.rectangle(image_np, (x, y), (x + w, y + h), (0, 255, 0), 2)
+            cv2.putText(
+                image_np,
+                f"ID: {face_id}, Conf: {round(100 - confidence, 2)}%",
+                (x, y - 10),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.8,
+                (255, 0, 0),
+                2
+            )
+
+        # Convert back to PIL for display
+        result_image = Image.fromarray(image_np)
+        st.image(result_image, caption="Recognized Faces", use_column_width=True)
+
+        if recognized_faces:
+            st.write("### Recognized Faces")
+            for face_id, confidence in recognized_faces:
+                st.write(f"Face ID: {face_id}, Confidence: {round(100 - confidence, 2)}%")
+        else:
+            st.write("No faces recognized.")
+
+elif detection_mode == "Recognize from Camera":
+    st.header("Recognize Faces from Camera")
+
+    enable_camera = st.checkbox("Enable Camera")
+    picture = st.camera_input("Take a picture", disabled=not enable_camera)
+
+    if picture:
+        image = Image.open(picture)
+        image_np = np.array(image)
+
+        # Convert image to grayscale for face detection
+        gray = cv2.cvtColor(image_np, cv2.COLOR_BGR2GRAY)
+
+        # Detect faces
+        faces = detector.detectMultiScale(gray, 1.3, 5)
+
+        # Load the trained recognizer model
+        recognizer = cv2.face.LBPHFaceRecognizer_create()
+        recognizer.read('TrainingImageLabel/Trainer.yml')
+
+        recognized_faces = []
+
+        for (x, y, w, h) in faces:
+            face_id, confidence = recognizer.predict(gray[y:y + h, x:x + w])
+            recognized_faces.append((face_id, confidence))
+
+            # Draw a rectangle around the face
+            cv2.rectangle(image_np, (x, y), (x + w, y + h), (0, 255, 0), 2)
+            cv2.putText(
+                image_np,
+                f"ID: {face_id}, Conf: {round(100 - confidence, 2)}%",
+                (x, y - 10),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.8,
+                (255, 0, 0),
+                2
+            )
+
+        # Convert back to PIL for display
+        result_image = Image.fromarray(image_np)
+        st.image(result_image, caption="Recognized Faces", use_column_width=True)
+
+        if recognized_faces:
+            st.write("### Recognized Faces")
+            for face_id, confidence in recognized_faces:
+                st.write(f"Face ID: {face_id}, Confidence: {round(100 - confidence, 2)}%")
+        else:
+            st.write("No faces recognized.")
+            
 elif detection_mode == "Manual Attendance":
     st.header("Manual Attendance")
     st.write("This feature is under development.")
