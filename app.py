@@ -289,7 +289,7 @@ with st.sidebar:
     # Sidebar options for face detection modes
     detection_mode = st.radio(
         "Choose Face Detection Mode",
-        ('Home', 'File Upload for Image Capture', 'Train Faces', 'Recognize Faces', 'Recognize from Camera', 'Manual Attendance','Attendance Analysis'),
+        ('Home', 'File Upload for Image Capture', 'Train Faces', 'Recognize Faces', 'Recognize from Camera','Attendance Analysis'),
         index=0
     )
 
